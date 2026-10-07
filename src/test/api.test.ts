@@ -434,4 +434,273 @@ describe("HTTP API", () => {
     expect(body.data.credentials.scanned).toBeGreaterThan(0);
     expect(body.data.network).toBe("testnet");
   });
+
+  describe("transaction lifecycle history", () => {
+    const sporeA = `0x${"a1".repeat(32)}`;
+    const sporeB = `0x${"b1".repeat(32)}`;
+    const other = `0x${"c1".repeat(32)}`;
+
+    it("returns only one credential's writes, oldest first", async () => {
+      await api(
+        "/api/transactions",
+        json({
+          txHash: `0x${"e1".repeat(32)}`,
+          sporeId: sporeA,
+          type: "CREATE_CREDENTIAL",
+          status: "committed",
+        }),
+      );
+      await api(
+        "/api/transactions",
+        json({
+          txHash: `0x${"e2".repeat(32)}`,
+          sporeId: sporeA,
+          type: "TRANSFER_CREDENTIAL",
+          status: "committed",
+        }),
+      );
+      await api(
+        "/api/transactions",
+        json({
+          txHash: `0x${"e3".repeat(32)}`,
+          sporeId: sporeB,
+          type: "CREATE_CREDENTIAL",
+          status: "committed",
+        }),
+      );
+
+      const { status, body } = await api(
+        `/api/transactions?sporeId=${sporeA}`,
+      );
+
+      expect(status).toBe(200);
+      expect(body.meta!.total).toBe(2);
+      expect(body.data.map((row: { type: string }) => row.type)).toEqual([
+        "CREATE_CREDENTIAL",
+        "TRANSFER_CREDENTIAL",
+      ]);
+    });
+
+    it("rejects a malformed Spore id filter", async () => {
+      const { status } = await api(`/api/transactions?sporeId=${other}0`);
+
+      expect(status).toBe(400);
+    });
+  });
+
+  describe("public verification (no authentication)", () => {
+    it("verifies a spore id with no cookie and sets none", async () => {
+      workingNode();
+      findSporeMock.mockResolvedValue(chainCell(fixtures.TX_HASH));
+
+      const response = await fetch(
+        `${base}/api/spores/${fixtures.SPORE_ID}/verify`,
+      );
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get("set-cookie")).toBeNull();
+
+      const body = (await response.json()) as Envelope<any>;
+      expect(body.data.state).toBe("verified");
+      expect(body.data.verification.currentOwner).toBe(fixtures.CHAIN_OWNER);
+    });
+
+    it("is not swayed by a bogus session cookie", async () => {
+      // A verifier has no account, so an unusable cookie must be ignored
+      // rather than rejected: the answer comes from the chain either way.
+      workingNode();
+      findSporeMock.mockResolvedValue(chainCell(fixtures.TX_HASH));
+
+      const { status, body } = await api(
+        `/api/spores/${fixtures.SPORE_ID}/verify`,
+        { headers: { Cookie: "ckb_session=not-a-real-token" } },
+      );
+
+      expect(status).toBe(200);
+      expect(body.data.state).toBe("verified");
+    });
+
+    it("never puts authentication data in a verification response", async () => {
+      workingNode();
+      findSporeMock.mockResolvedValue(chainCell(fixtures.TX_HASH));
+
+      const created = await api(
+        "/api/credentials",
+        json({
+          sporeId: `0x${"7".repeat(64)}`,
+          title: "Public verification check",
+          issuerName: "CKB Academy",
+          issuerType: "SCHOOL",
+          issuerAddress: fixtures.ISSUER,
+          recipientAddress: fixtures.RECIPIENT,
+          credentialType: "OTHER",
+          issueDate: "2026-07-01",
+          creationTxHash: fixtures.TX_HASH,
+          network: "testnet",
+        }),
+      );
+      expect(created.status).toBe(201);
+
+      const { status, body } = await api(
+        `/api/credentials/${created.body.data.id}/verify`,
+      );
+
+      expect(status).toBe(200);
+      expect(JSON.stringify(body)).not.toMatch(
+        /session|session_hash|token|nonce|password|cookie/i,
+      );
+    });
+
+    it("rejects a malformed spore id without asking who is calling", async () => {
+      const { status, body } = await api(
+        `/api/spores/${fixtures.TX_HASH}0x0/verify`,
+      );
+
+      expect(status).toBe(400);
+      expect(body.error!.code).toBe("VALIDATION_ERROR");
+    });
+  });
+
+  describe("GET /api/verify/:credentialId (third-party API)", () => {
+    it("answers a valid credential with no session and no index lookup", async () => {
+      workingNode();
+      findSporeMock.mockResolvedValue(chainCell(fixtures.TX_HASH));
+
+      const response = await fetch(`${base}/api/verify/${fixtures.SPORE_ID}`);
+
+      expect(response.status).toBe(200);
+      expect(response.headers.get("set-cookie")).toBeNull();
+
+      const body = (await response.json()) as Envelope<any>;
+      expect(body.data.valid).toBe(true);
+      expect(body.data.state).toBe("active");
+      expect(body.data.source).toBe("ckb");
+      expect(body.data.reason).toBeNull();
+      expect(body.data.credential.id).toBe(fixtures.SPORE_ID);
+      expect(body.data.credential.type).toBe("COURSE_COMPLETION");
+      expect(body.data.credential.issuer).toEqual({
+        name: "CKB Academy",
+        type: "SCHOOL",
+      });
+      expect(body.data.credential.holder).toBe(fixtures.CHAIN_OWNER);
+      expect(body.data.blockchain).toEqual({
+        network: "testnet",
+        status: "active",
+        sporeId: fixtures.SPORE_ID,
+        currentOwner: fixtures.CHAIN_OWNER,
+        creationTxHash: fixtures.TX_HASH,
+      });
+      expect(JSON.stringify(body)).not.toMatch(
+        /session|token|nonce|password|cookie/i,
+      );
+    });
+
+    it("returns the new holder after a transfer and never the stale index", async () => {
+      // The index still holds the original recipient; the cell has moved to a
+      // new wallet. The API must answer from the cell and expose no index rows.
+      const created = await api(
+        "/api/credentials",
+        json({
+          sporeId: `0x${"8".repeat(64)}`,
+          title: "Transferred credential",
+          issuerName: "CKB Academy",
+          issuerType: "SCHOOL",
+          issuerAddress: fixtures.ISSUER,
+          recipientAddress: fixtures.RECIPIENT,
+          credentialType: "OTHER",
+          issueDate: "2026-08-01",
+          creationTxHash: fixtures.TX_HASH,
+          network: "testnet",
+        }),
+      );
+      expect(created.status).toBe(201);
+
+      workingNode();
+      findSporeMock.mockResolvedValue(chainCell(fixtures.TX_HASH));
+
+      const { status, body } = await api(
+        `/api/verify/${`0x${"8".repeat(64)}`}`,
+      );
+
+      expect(status).toBe(200);
+      expect(body.data.valid).toBe(true);
+      expect(body.data.state).toBe("active");
+      expect(body.data.credential.holder).toBe(fixtures.CHAIN_OWNER);
+      // The original recipient is index-only; it must not appear anywhere.
+      expect(JSON.stringify(body)).not.toContain(fixtures.RECIPIENT);
+      expect(JSON.stringify(body)).not.toMatch(/createdAt|ownerAddress/);
+    });
+
+    it("reports a melted credential as not_found with no credential payload", async () => {
+      workingNode();
+      findSporeMock.mockResolvedValue(undefined);
+
+      const { status, body } = await api(
+        `/api/verify/${fixtures.MELTED_SPORE_ID}`,
+      );
+
+      expect(status).toBe(200);
+      expect(body.data.valid).toBe(false);
+      expect(body.data.state).toBe("not_found");
+      expect(body.data.credential).toBeNull();
+      expect(body.data.source).toBe("ckb");
+      expect(body.data.blockchain.status).toBe("not_found");
+    });
+
+    it("marks an expired credential invalid while still showing it exists", async () => {
+      workingNode();
+      findSporeMock.mockResolvedValue(
+        chainCell(fixtures.TX_HASH, {
+          issueDate: "2020-01-01",
+          expirationDate: "2020-12-31",
+        }),
+      );
+
+      const { status, body } = await api(
+        `/api/verify/${fixtures.SPORE_ID}`,
+      );
+
+      expect(status).toBe(200);
+      expect(body.data.valid).toBe(false);
+      expect(body.data.state).toBe("invalid");
+      expect(body.data.reason).toContain("2020-12-31");
+      // The cell is alive, so "invalid" must not read as "gone".
+      expect(body.data.credential.title).toBe("Advanced TypeScript");
+      expect(body.data.blockchain.status).toBe("active");
+    });
+
+    it("answers unable_to_verify instead of a credential verdict when the node is down", async () => {
+      findSporeMock.mockResolvedValue(chainCell(fixtures.TX_HASH));
+      const deadNode: FakeGetTransaction = async () => {
+        throw new Error("connection refused");
+      };
+      context.services.ckbClient.client.getTransaction =
+        deadNode as unknown as typeof context.services.ckbClient.client.getTransaction;
+
+      const { status, body } = await api(
+        `/api/verify/${fixtures.SPORE_ID}`,
+      );
+
+      expect(status).toBe(200);
+      expect(body.data.valid).toBe(false);
+      expect(body.data.state).toBe("unable_to_verify");
+      expect(body.data.credential).toBeNull();
+      expect(body.data.blockchain.status).toBe("unknown");
+      // An outage must never be reported as missing or invalid credentials.
+      expect(body.data.state).not.toBe("not_found");
+      expect(body.data.state).not.toBe("invalid");
+
+      workingNode();
+    });
+
+    it("rejects malformed ids without asking the node", async () => {
+      const outpoint = await api(`/api/verify/${fixtures.TX_HASH}0x0`);
+      expect(outpoint.status).toBe(400);
+      expect(outpoint.body.error!.code).toBe("VALIDATION_ERROR");
+
+      const garbage = await api("/api/verify/not-an-id");
+      expect(garbage.status).toBe(400);
+      expect(garbage.body.error!.code).toBe("VALIDATION_ERROR");
+    });
+  });
 });

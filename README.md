@@ -52,6 +52,10 @@ The API listens on `http://127.0.0.1:3000` by default.
 All responses are JSON. Success bodies are wrapped in `data`; errors use
 `{ "error": { "code", "message", "details? } }`.
 
+Verification is deliberately anonymous: `GET /api/credentials/:id/verify` and
+`GET /api/spores/:sporeId/verify` need no session, and their responses carry no
+session, user or authentication data. Only `/api/profile` requires a session.
+
 ### Health
 
 `GET /api/health`
@@ -137,6 +141,21 @@ when the chain state differed from what was stored.
   }
 }
 ```
+
+## Domain model
+
+Three roles, all per-credential rather than account types:
+
+| Role        | In this service                                                        |
+| ----------- | ---------------------------------------------------------------------- |
+| **Issuer**  | `issuerName` / `issuerType` / `issuerAddress`, from the issue request    |
+| **Holder**  | `recipientAddress` (original) and `ownerAddress` (current); the current one is written only from a chain read |
+| **Verifier**| Anyone calling the verify routes — no session, no identity stored       |
+
+`credentialActors()` in `src/types/domain.ts` projects a `CredentialRecord`
+onto the first two. The lifecycle (issued → active → transferred / melted) and
+the authority rules are in
+[docs/domain-model.md](../docs/domain-model.md).
 
 ## Data model
 

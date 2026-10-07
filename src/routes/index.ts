@@ -9,6 +9,7 @@ import {
 import { createHealthRouter } from "./health.routes.js";
 import { createProfileRouter } from "./profile.routes.js";
 import { createTransactionRouter } from "./transaction.routes.js";
+import { createVerifyRouter } from "./verify.routes.js";
 
 export function createApiRouter(context: AppContext): Router {
   const router = Router();
@@ -27,6 +28,15 @@ export function createApiRouter(context: AppContext): Router {
   router.use(
     "/spores",
     createSporeRouter({
+      credentials: context.services.credentials,
+      verification: context.services.verification,
+      spores: context.services.spores,
+      transactions: context.services.ckbTransactions,
+    }),
+  );
+  router.use(
+    "/verify",
+    createVerifyRouter({
       credentials: context.services.credentials,
       verification: context.services.verification,
       spores: context.services.spores,

@@ -83,6 +83,17 @@ export function transactionController(deps: TransactionControllerDeps) {
       const offset = Number(req.query.offset ?? 0);
       const safeLimit = Number.isFinite(limit) ? Math.min(Math.max(limit, 1), 100) : 25;
       const safeOffset = Number.isFinite(offset) ? Math.max(offset, 0) : 0;
+      const sporeId =
+        typeof req.query.sporeId === "string" ? req.query.sporeId : undefined;
+
+      if (sporeId) {
+        const data = repositories.transactions.listBySporeId(sporeId, safeLimit);
+        res.json({
+          data,
+          meta: { total: data.length, limit: safeLimit, offset: 0 },
+        });
+        return;
+      }
 
       const result = repositories.transactions.list(safeLimit, safeOffset);
       res.json({

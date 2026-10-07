@@ -153,6 +153,25 @@ export function credentialController(deps: CredentialControllerDeps) {
       });
     },
 
+    /**
+     * `GET /api/verify/:credentialId` - the third-party integration surface.
+     *
+     * No session, no index, no database fields: the verdict comes from
+     * `VerificationService.verifyPublic`, which reads the live cell and applies
+     * the validity rules. `valid: false` with `state: "unable_to_verify"` is an
+     * infrastructure answer and must not be read as a credential verdict.
+     */
+    async verifyPublic(
+      req: Request,
+      res: Response,
+      _next: NextFunction,
+    ): Promise<void> {
+      const { credentialId } = req.params as { credentialId: string };
+      const result = await verification.verifyPublic(credentialId);
+
+      res.json({ data: result });
+    },
+
     /** `GET /api/spores/owner/:address` - live Spores owned by an address. */
     async listByOwner(
       req: Request,

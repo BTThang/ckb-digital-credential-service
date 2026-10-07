@@ -33,6 +33,11 @@ export type IssuerType = (typeof ISSUER_TYPES)[number];
 /**
  * Off-chain index status. It is deliberately NOT a verification result:
  * `pending` means the creation transaction has not been committed yet.
+ *
+ * Lifecycle mapping (docs/domain-model.md#3-credential-lifecycle):
+ * `pending` = ISSUED, `active` = ACTIVE (a transfer keeps it `active` and only
+ * moves `ownerAddress`), `melted` = REVOKED/MELTED, `unknown` = the node could
+ * not be queried, which is an infrastructure state and never a credential one.
  */
 export const CREDENTIAL_STATUSES = [
   "pending",
@@ -104,6 +109,59 @@ export interface CredentialRecord {
   updatedAt: string;
 }
 
+// The three parties in the credential model are roles a credential *has*, not
+// account types: one address can be the issuer of one credential and the
+// holder of another, and issuing to yourself is legal.
+// See docs/domain-model.md.
+
+/** Who wrote the credential. From the issuer's request; compared with, never corrected by, the chain. */
+export interface Issuer {
+  address: string;
+  name: string;
+  type: IssuerType;
+}
+
+/**
+ * Who owns the credential.
+ *
+ * `ownerAddress` (the current holder) is the address behind the live Spore
+ * cell's lock script and is written to the index only from a chain read, so it
+ * follows the credential into any wallet that receives it. `recipientAddress`
+ * is who it was issued to and never changes on transfer.
+ */
+export interface Holder {
+  /** Current owner, chain-authoritative. */
+  address: string;
+  /** Original recipient, fixed at issue. */
+  recipientAddress: string;
+}
+
+/**
+ * Issuer and holder projected from an indexed record.
+ *
+ * The verifier is deliberately absent: a verifier never authenticates, so
+ * there is no identity to project and no session to remember.
+ */
+export interface CredentialActors {
+  issuer: Issuer;
+  holder: Holder;
+}
+
+/** View a cached record through the actor roles. Pure projection — the record stays the only representation. */
+export function credentialActors(record: CredentialRecord): CredentialActors {
+  return {
+    issuer: {
+      address: record.issuerAddress,
+      name: record.issuerName,
+      type: record.issuerType,
+    },
+    holder: {
+      address: record.ownerAddress,
+      recipientAddress: record.recipientAddress,
+    },
+  };
+}
+
 export interface TransactionRecord {
   id: string;
   txHash: string;
@@ -150,6 +208,63 @@ export interface SporeVerificationResult {
   capacity: string | null;
   /** Why the spore could not be confirmed, when the state is not `verified`. */
   reason: string | null;
+}
+
+// ---- Public verification (GET /api/verify/:credentialId) ----
+
+/**
+ * The verdict a third party sees.
+ *
+ * Derived from a `VerificationState` plus the credential-level validity rules,
+ * and deliberately narrower than `VerificationState`: `active` and `invalid`
+ * are conclusions about the credential, `not_found` says the cell is gone, and
+ * `unable_to_verify` is carried through unchanged so an infrastructure failure
+ * can never be read as a credential verdict (spec Phase 2/3).
+ */
+export const PUBLIC_VERIFICATION_STATES = [
+  "active",
+  "invalid",
+  "not_found",
+  "unable_to_verify",
+] as const;
+
+export type PublicVerificationState = (typeof PUBLIC_VERIFICATION_STATES)[number];
+
+/** Credential facts, all read from the cell payload. `null` when there is no live cell. */
+export interface PublicVerificationCredential {
+  /** The Spore id — the credential's stable identity across transfers. */
+  id: string;
+  title: string | null;
+  type: CredentialType | null;
+  issuer: { name: string; type: IssuerType | null } | null;
+  /** Current owner from the live cell's lock; this is what a transfer changes. */
+  holder: string | null;
+  issuedAt: string | null;
+  expiresAt: string | null;
+}
+
+/** Chain facts. `status` mirrors the lifecycle: a transfer keeps it `active`. */
+export interface PublicVerificationBlockchain {
+  network: string;
+  status: "active" | "not_found" | "unknown";
+  sporeId: string;
+  currentOwner: string | null;
+  creationTxHash: string | null;
+}
+
+/**
+ * The public verification envelope. Carries no session, user, index or
+ * database fields: everything in it was read from CKB.
+ */
+export interface PublicVerification {
+  valid: boolean;
+  state: PublicVerificationState;
+  /** Always "ckb": there is no second source that could answer this. */
+  source: "ckb";
+  reason: string | null;
+  checkedAt: string;
+  credential: PublicVerificationCredential | null;
+  blockchain: PublicVerificationBlockchain;
 }
 
 export interface TransactionChainInfo {

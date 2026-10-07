@@ -55,6 +55,22 @@ export class TransactionRepository {
       .map(toTransactionRecord);
   }
 
+  /**
+   * The lifecycle history of one credential, oldest first.
+   *
+   * Every write records the Spore id, and the id survives transfers and melts,
+   * so filtering on it reconstructs the whole issue/transfer/melt sequence —
+   * unlike the owner, which only ever shows the latest holder.
+   */
+  listBySporeId(sporeId: string, limit = 50): TransactionRecord[] {
+    return this.db.raw
+      .prepare<[string, number], TransactionRow>(
+        `${SELECT} WHERE spore_id = ? ORDER BY created_at ASC, rowid ASC LIMIT ?`,
+      )
+      .all(sporeId.toLowerCase(), limit)
+      .map(toTransactionRecord);
+  }
+
   /** Idempotent upsert keyed on `tx_hash`. */
   upsert(input: UpsertTransactionInput): TransactionRecord {
     const txHash = input.txHash.toLowerCase();

@@ -1,6 +1,7 @@
 import { ccc } from "@ckb-ccc/ccc";
 
 import type { CkbClientService } from "../services/ckb/client.js";
+import type { SporeCredentialPayload } from "../types/domain.js";
 import type { SignatureInput } from "../validation/auth.schema.js";
 
 export const TX_HASH = `0x${"b".repeat(64)}`;
@@ -53,7 +54,10 @@ export const fixtures = {
 };
 
 /** A live Spore cell as returned by `spore.findSpore`. */
-export function chainCell(creationTxHash: string = TX_HASH) {
+export function chainCell(
+  creationTxHash: string = TX_HASH,
+  payload: Partial<SporeCredentialPayload> = {},
+) {
   // `sporeData.content` is the raw cell data, i.e. hex-encoded on the wire.
   const content = `0x${Buffer.from(
     JSON.stringify({
@@ -66,6 +70,7 @@ export function chainCell(creationTxHash: string = TX_HASH) {
       issueDate: "2026-01-15",
       expirationDate: null,
       network: "testnet",
+      ...payload,
     }),
     "utf8",
   ).toString("hex")}`;

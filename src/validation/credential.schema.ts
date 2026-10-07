@@ -127,6 +127,15 @@ export const sporeIdParamSchema = z
   .object({ sporeId: sporeIdSchema })
   .strict();
 
+/**
+ * `GET /api/verify/:credentialId`. The public credential id *is* the Spore id,
+ * so it validates against the same rule under its public name rather than
+ * inventing a second id format.
+ */
+export const credentialIdParamSchema = z
+  .object({ credentialId: sporeIdSchema })
+  .strict();
+
 export const txHashParamSchema = z
   .object({ txHash: hex32Schema })
   .strict();

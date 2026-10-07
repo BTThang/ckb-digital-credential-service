@@ -8,6 +8,7 @@ import {
 import { asyncHandler } from "../utils/async-handler.js";
 import { validate } from "../middleware/validate.js";
 import {
+  sporeIdSchema,
   txHashParamSchema,
   upsertTransactionSchema,
 } from "../validation/credential.schema.js";
@@ -16,6 +17,8 @@ const listQuerySchema = z
   .object({
     limit: z.coerce.number().int().min(1).max(100).default(25),
     offset: z.coerce.number().int().min(0).default(0),
+    // Optional filter so a credential page can show only its own lifecycle.
+    sporeId: sporeIdSchema.optional(),
   })
   .strict();
 

@@ -26,6 +26,7 @@ interface SessionUser {
   id: number;
   walletAddress: string;
   displayName: string | null;
+  bio: string | null;
   lastLoginAt: string | null;
 }
 
@@ -96,7 +97,7 @@ describe("wallet authentication", () => {
 
     expect(status).toBe(200);
     expect(cookie).toBeDefined();
-    return cookie!.split(";")[0];
+    return cookie!.split(";")[0]!;
   }
 
   beforeAll(async () => {
@@ -154,7 +155,7 @@ describe("wallet authentication", () => {
 
   it("signs a wallet in and stores only a hash of the session token", async () => {
     const cookie = await signIn(alice);
-    const token = decodeURIComponent(cookie.split("=")[1]);
+    const token = decodeURIComponent(cookie.split("=")[1]!);
 
     const row = context.db.raw
       .prepare<[], { session_hash: string }>("SELECT session_hash FROM sessions")

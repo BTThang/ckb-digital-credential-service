@@ -1,8 +1,23 @@
 import type { CkbNetwork } from "../config/index.js";
-import type { CredentialRecord, SporeVerificationResult } from "../types/domain.js";
+import type {
+  CredentialRecord,
+  PublicVerification,
+  SporeVerificationResult,
+} from "../types/domain.js";
 import { NotFoundError } from "../utils/errors.js";
 import type { CredentialRepository } from "../repositories/credential.repository.js";
 import type { SporeService } from "./ckb/spore.service.js";
+
+/**
+ * The only credential-level validity rule available today: an expired
+ * credential is `invalid` even while its cell is alive. End-of-day UTC, which
+ * is what the web app's `isExpired` applies — the two must agree or the page
+ * and the API would contradict each other.
+ */
+function isExpired(expirationDate: string | null | undefined): boolean {
+  if (!expirationDate) return false;
+  return Date.parse(`${expirationDate}T23:59:59Z`) < Date.now();
+}
 
 export interface VerificationReport {
   credential: CredentialRecord;
@@ -77,6 +92,110 @@ export class VerificationService {
       blockNumber: creationTx.blockNumber,
       capacity: spore.capacity,
       reason,
+    };
+  }
+
+  /**
+   * The public verification verdict behind `GET /api/verify/:credentialId`.
+   *
+   * It reuses `verifySporeId` — the single chain-reading path — and only maps
+   * the result onto the public envelope, so there is no second place where a
+   * cell is read or a state decided. No index lookup happens here at all: a
+   * third party asks the chain, and the answer carries no database fields.
+   */
+  async verifyPublic(sporeId: string): Promise<PublicVerification> {
+    const verification = await this.verifySporeId(sporeId);
+    const { state, content } = verification;
+
+    const blockchain = {
+      network: verification.network,
+      status:
+        state === "verified"
+          ? ("active" as const)
+          : state === "not_found"
+            ? ("not_found" as const)
+            : ("unknown" as const),
+      sporeId: verification.sporeId,
+      currentOwner: verification.currentOwner,
+      // Without a status there is no transaction to point at: an id alone
+      // cannot reveal one, so it is reported as null rather than as the id.
+      creationTxHash: verification.creationTxStatus
+        ? verification.creationTxHash
+        : null,
+    };
+
+    if (state === "unable_to_verify") {
+      return {
+        valid: false,
+        state: "unable_to_verify",
+        source: "ckb",
+        reason:
+          verification.reason ??
+          "The CKB network could not be queried right now",
+        checkedAt: verification.checkedAt,
+        credential: null,
+        blockchain,
+      };
+    }
+
+    if (state === "not_found") {
+      return {
+        valid: false,
+        state: "not_found",
+        source: "ckb",
+        reason: verification.reason ?? "No live Spore cell has this id",
+        checkedAt: verification.checkedAt,
+        credential: null,
+        blockchain,
+      };
+    }
+
+    // From here the cell is live, so the credential exists and can be shown —
+    // including when it fails a validity rule (spec: invalid ≠ not found).
+    const credential = {
+      id: verification.sporeId,
+      title: content?.title ?? null,
+      type: content?.credentialType ?? null,
+      issuer: content
+        ? { name: content.issuerName, type: content.issuerType ?? null }
+        : null,
+      holder: verification.currentOwner,
+      issuedAt: content?.issueDate ?? null,
+      expiresAt: content?.expirationDate ?? null,
+    };
+
+    if (!content) {
+      return {
+        valid: false,
+        state: "invalid",
+        source: "ckb",
+        reason: "The cell payload does not decode to a credential",
+        checkedAt: verification.checkedAt,
+        credential,
+        blockchain,
+      };
+    }
+
+    if (isExpired(content.expirationDate)) {
+      return {
+        valid: false,
+        state: "invalid",
+        source: "ckb",
+        reason: `Expired on ${content.expirationDate}`,
+        checkedAt: verification.checkedAt,
+        credential,
+        blockchain,
+      };
+    }
+
+    return {
+      valid: true,
+      state: "active",
+      source: "ckb",
+      reason: null,
+      checkedAt: verification.checkedAt,
+      credential,
+      blockchain,
     };
   }
 
