@@ -78,7 +78,7 @@ export function transactionController(deps: TransactionControllerDeps) {
     },
 
     /** `GET /api/transactions` - paginated tracking list (newest first). */
-    list(req: Request, res: Response, _next: NextFunction): void {
+    async list(req: Request, res: Response, _next: NextFunction): Promise<void> {
       const limit = Number(req.query.limit ?? 25);
       const offset = Number(req.query.offset ?? 0);
       const safeLimit = Number.isFinite(limit) ? Math.min(Math.max(limit, 1), 100) : 25;
@@ -87,6 +87,13 @@ export function transactionController(deps: TransactionControllerDeps) {
         typeof req.query.sporeId === "string" ? req.query.sporeId : undefined;
 
       if (sporeId) {
+        // A credential's history is shown as chain truth: reconcile the
+        // still-unfinished writes first, so "Issued" flips to committed as
+        // soon as the cell is live instead of staying on its cached status.
+        await repositories.transactions.reconcileBySporeId(
+          sporeId,
+          ckbTransactions,
+        );
         const data = repositories.transactions.listBySporeId(sporeId, safeLimit);
         res.json({
           data,

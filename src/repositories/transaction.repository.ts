@@ -168,14 +168,40 @@ export class TransactionRepository {
    * turn this into an unbounded retry loop.
    */
   async reconcile(ckb: CkbTransactionService): Promise<number> {
-    const pending = [
-      ...this.listByStatus("submitted"),
-      ...this.listByStatus("pending"),
-    ];
+    return this.reconcileRecords(
+      [
+        ...this.listByStatus("submitted"),
+        ...this.listByStatus("pending"),
+      ],
+      ckb,
+    );
+  }
 
+  /**
+   * Reconciles only one credential's unfinished writes.
+   *
+   * The client only calls `/sync` once, right after broadcasting, when the
+   * transaction is usually still unconfirmed — so without this the row would
+   * stay `submitted`/`pending` forever. The lifecycle view calls it on read so
+   * the history reflects the chain the moment the page is opened.
+   */
+  async reconcileBySporeId(
+    sporeId: string,
+    ckb: CkbTransactionService,
+  ): Promise<number> {
+    const pending = this.listBySporeId(sporeId, 100).filter(
+      (record) => record.status === "submitted" || record.status === "pending",
+    );
+    return this.reconcileRecords(pending, ckb);
+  }
+
+  private async reconcileRecords(
+    records: TransactionRecord[],
+    ckb: CkbTransactionService,
+  ): Promise<number> {
     let updated = 0;
 
-    for (const record of pending) {
+    for (const record of records) {
       try {
         const chain = await ckb.getTransaction(record.txHash);
         if (chain.error) {

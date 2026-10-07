@@ -486,6 +486,29 @@ describe("HTTP API", () => {
 
       expect(status).toBe(400);
     });
+
+    it("reconciles a stale 'submitted' write to committed when its history is read", async () => {
+      // The index was written right after broadcast, before the cell committed;
+      // reading the credential's history must reflect the chain, not the cache.
+      await api(
+        "/api/transactions",
+        json({
+          txHash: fixtures.TX_HASH,
+          sporeId: other,
+          type: "CREATE_CREDENTIAL",
+          status: "submitted",
+        }),
+      );
+
+      const { status, body } = await api(`/api/transactions?sporeId=${other}`);
+
+      expect(status).toBe(200);
+      const issued = body.data.find(
+        (row: { txHash: string }) => row.txHash === fixtures.TX_HASH,
+      );
+      expect(issued.status).toBe("committed");
+      expect(issued.blockNumber).toBe("22574077");
+    });
   });
 
   describe("public verification (no authentication)", () => {
